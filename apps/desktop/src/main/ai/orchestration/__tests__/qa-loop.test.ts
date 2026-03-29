@@ -202,12 +202,44 @@ describe('QALoop', () => {
       if (path.endsWith('implementation_plan.json')) {
         planReadCount++;
         if (planReadCount === 1) return Promise.resolve(completedPlan()); // isBuildComplete
-        // Reviewer on iteration 1 ran when sessionCallCount >= 1
-        // Serve rejected until fixer has run (sessionCallCount >= 2), then approved
-        if (sessionCallCount < 2) {
-          return Promise.resolve(completedPlan('rejected'));
+        // Baseline before iteration 1: no verdict yet.
+        if (sessionCallCount === 0) {
+          return Promise.resolve(completedPlan());
         }
-        return Promise.resolve(completedPlan('approved'));
+        // Reviewer iteration 1 produces a fresh rejection.
+        if (sessionCallCount === 1) {
+          return Promise.resolve(JSON.stringify({
+            phases: [{ subtasks: [{ status: 'completed' }] }],
+            qa_signoff: {
+              status: 'rejected',
+              qa_session: 1,
+              timestamp: '2026-03-29T10:00:01.000Z',
+              issues_found: [{ title: 'Test failure', type: 'critical' }],
+            },
+          }));
+        }
+        // Baseline before iteration 2 still sees the previous rejection.
+        if (sessionCallCount === 2) {
+          return Promise.resolve(JSON.stringify({
+            phases: [{ subtasks: [{ status: 'completed' }] }],
+            qa_signoff: {
+              status: 'rejected',
+              qa_session: 1,
+              timestamp: '2026-03-29T10:00:01.000Z',
+              issues_found: [{ title: 'Test failure', type: 'critical' }],
+            },
+          }));
+        }
+        // Reviewer iteration 2 produces a fresh approval.
+        return Promise.resolve(JSON.stringify({
+          phases: [{ subtasks: [{ status: 'completed' }] }],
+          qa_signoff: {
+            status: 'approved',
+            qa_session: 2,
+            timestamp: '2026-03-29T10:00:02.000Z',
+            issues_found: [],
+          },
+        }));
       }
       return Promise.reject(new Error('ENOENT'));
     });
@@ -288,29 +320,65 @@ describe('QALoop', () => {
     expect(outcome.reason).toBe('consecutive_errors');
   });
 
+  it('does not treat a stale rejected qa_signoff as a fresh review result', async () => {
+    const staleRejectedPlan = completedPlan('rejected');
+
+    mockReadFile.mockImplementation((path: string) => {
+      if (path.endsWith('implementation_plan.json')) {
+        return Promise.resolve(staleRejectedPlan);
+      }
+      return Promise.reject(new Error('ENOENT'));
+    });
+
+    const runSession = vi.fn().mockResolvedValue(makeSessionResult('completed'));
+
+    const config = makeConfig({ runSession, maxIterations: 5 });
+    const loop = new QALoop(config);
+    const outcome = await loop.run();
+
+    expect(outcome.approved).toBe(false);
+    expect(outcome.reason).toBe('consecutive_errors');
+
+    const calls = runSession.mock.calls as Array<[QASessionRunConfig]>;
+    expect(calls).toHaveLength(3);
+    expect(calls.every((c) => c[0].agentType === 'qa_reviewer')).toBe(true);
+  });
+
   // -------------------------------------------------------------------------
   // Recurring issue detection
   // -------------------------------------------------------------------------
 
   it('escalates when the same issue recurs 3 or more times', async () => {
     const recurringIssue = { title: 'Null pointer exception', type: 'critical' as const };
-    const rejectedPlan = JSON.stringify({
-      phases: [{ subtasks: [{ status: 'completed' }] }],
-      qa_signoff: { status: 'rejected', issues_found: [recurringIssue] },
-    });
-
     let planReadCount = 0;
+    let sessionCallCount = 0;
+
+    const runSession = vi.fn().mockImplementation(async () => {
+      sessionCallCount++;
+      return makeSessionResult('completed');
+    });
 
     mockReadFile.mockImplementation((path: string) => {
       if (path.endsWith('implementation_plan.json')) {
         planReadCount++;
         if (planReadCount === 1) return Promise.resolve(completedPlan()); // build complete
-        return Promise.resolve(rejectedPlan);
+        if (sessionCallCount === 0) {
+          return Promise.resolve(completedPlan());
+        }
+        return Promise.resolve(JSON.stringify({
+          phases: [{ subtasks: [{ status: 'completed' }] }],
+          qa_signoff: {
+            status: 'rejected',
+            qa_session: sessionCallCount,
+            timestamp: `2026-03-29T10:00:${String(sessionCallCount).padStart(2, '0')}.000Z`,
+            issues_found: [recurringIssue],
+          },
+        }));
       }
       return Promise.reject(new Error('ENOENT'));
     });
 
-    const config = makeConfig({ maxIterations: 10 });
+    const config = makeConfig({ runSession, maxIterations: 10 });
     const loop = new QALoop(config);
     const outcome = await loop.run();
 
@@ -401,14 +469,30 @@ describe('QALoop', () => {
   // -------------------------------------------------------------------------
 
   it('processes QA_FIX_REQUEST.md before running the review loop', async () => {
+    let sessionCallCount = 0;
+
     // QA_FIX_REQUEST.md exists
     mockReadFile.mockImplementation((path: string) => {
       if (path.endsWith('QA_FIX_REQUEST.md')) return Promise.resolve('Fix this please');
-      if (path.endsWith('implementation_plan.json')) return Promise.resolve(completedPlan('approved'));
+      if (path.endsWith('implementation_plan.json')) {
+        if (sessionCallCount <= 1) return Promise.resolve(completedPlan());
+        return Promise.resolve(JSON.stringify({
+          phases: [{ subtasks: [{ status: 'completed' }] }],
+          qa_signoff: {
+            status: 'approved',
+            qa_session: 1,
+            timestamp: '2026-03-29T10:00:01.000Z',
+            issues_found: [],
+          },
+        }));
+      }
       return Promise.reject(new Error('ENOENT'));
     });
 
-    const runSession = vi.fn().mockResolvedValue(makeSessionResult('completed'));
+    const runSession = vi.fn().mockImplementation(async () => {
+      sessionCallCount++;
+      return makeSessionResult('completed');
+    });
     const config = makeConfig({ runSession, maxIterations: 5 });
     const loop = new QALoop(config);
     const outcome = await loop.run();

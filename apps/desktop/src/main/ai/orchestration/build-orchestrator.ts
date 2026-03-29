@@ -11,7 +11,7 @@
  * defined in phase-protocol.ts.
  */
 
-import { readFile, writeFile, unlink } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { EventEmitter } from 'events';
 
@@ -580,11 +580,6 @@ export class BuildOrchestrator extends EventEmitter {
         }
         this.markPhaseCompleted('qa_fixing');
 
-        // Delete qa_report.md before re-review so the reviewer writes a clean verdict.
-        // The fixer often edits qa_report.md (changing status to "FIXES_APPLIED" etc.)
-        // which corrupts the verdict detection. Deleting ensures a fresh report each cycle.
-        await this.resetQAReport();
-
         // Loop back to QA review
         this.transitionPhase('qa_review', 'Re-running QA review after fixes');
         continue;
@@ -753,20 +748,6 @@ export class BuildOrchestrator extends EventEmitter {
       return 'unknown';
     } catch {
       return 'unknown';
-    }
-  }
-
-  /**
-   * Delete qa_report.md so the next QA review cycle writes a fresh verdict.
-   * The QA fixer often edits qa_report.md (adding "FIXES_APPLIED" etc.),
-   * which corrupts verdict detection. Resetting ensures clean state.
-   */
-  private async resetQAReport(): Promise<void> {
-    const qaReportPath = join(this.config.specDir, 'qa_report.md');
-    try {
-      await unlink(qaReportPath);
-    } catch {
-      // File may not exist — that's fine
     }
   }
 

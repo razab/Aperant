@@ -159,6 +159,7 @@ interface QASignoff {
   qa_session?: number;
   tests_passed?: Record<string, string>;
   issues_found?: QAIssue[];
+  timestamp?: string;
 }
 
 // =============================================================================
@@ -228,6 +229,7 @@ export class QALoop extends EventEmitter {
 
         const iterationStart = Date.now();
         this.emitTyped('qa-iteration-start', iteration, maxIterations);
+        const baselineSignoff = await this.readQASignoff();
 
         // Run QA reviewer
         this.sessionNumber++;
@@ -253,10 +255,40 @@ export class QALoop extends EventEmitter {
           return this.outcome(false, iteration, Date.now() - startTime, 'cancelled');
         }
 
+        if (reviewResult.outcome !== 'completed') {
+          consecutiveErrors++;
+          const errorMsg = this.describeReviewFailure(reviewResult.outcome, reviewResult.error?.message);
+          const iterationDuration = Date.now() - iterationStart;
+          await this.recordIteration(
+            iteration,
+            'error',
+            [{ title: 'QA review error', description: errorMsg }],
+            iterationDuration,
+          );
+
+          lastErrorContext = {
+            errorType: reviewResult.outcome,
+            errorMessage: errorMsg,
+            consecutiveErrors,
+            expectedAction: 'Resume QA review and write a fresh qa_signoff object only after the review completes',
+          };
+
+          if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+            this.emitTyped('log', `${MAX_CONSECUTIVE_ERRORS} consecutive errors — escalating to human`);
+            await this.writeReports('max_iterations');
+            return this.outcome(false, iteration, Date.now() - startTime, 'consecutive_errors');
+          }
+
+          this.emitTyped('log', `QA error (${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}), retrying with error feedback...`);
+          continue;
+        }
+
         // Read QA signoff from implementation_plan.json
         const signoff = await this.readQASignoff();
-        const status = this.resolveQAStatus(signoff);
-        const issues = signoff?.issues_found ?? [];
+        const hasFreshSignoff = !this.sameSignoff(signoff, baselineSignoff);
+        const effectiveSignoff = hasFreshSignoff ? signoff : null;
+        const status = this.resolveQAStatus(effectiveSignoff);
+        const issues = effectiveSignoff?.issues_found ?? [];
         const iterationDuration = Date.now() - iterationStart;
 
         this.emitTyped('qa-review-complete', iteration, status, issues);
@@ -389,6 +421,27 @@ export class QALoop extends EventEmitter {
     if (status === 'rejected' || status === 'failed' || status === 'issues') return 'rejected';
     if (status === 'fixes_applied') return 'fixes_applied';
     return 'unknown';
+  }
+
+  private sameSignoff(a: QASignoff | null, b: QASignoff | null): boolean {
+    return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  }
+
+  private describeReviewFailure(outcome: SessionResult['outcome'], errorMessage?: string): string {
+    switch (outcome) {
+      case 'rate_limited':
+        return errorMessage ?? 'QA reviewer hit a rate limit before writing a new qa_signoff';
+      case 'auth_failure':
+        return errorMessage ?? 'QA reviewer authentication failed before writing a new qa_signoff';
+      case 'context_window':
+        return 'QA reviewer hit the context window limit before writing a new qa_signoff';
+      case 'max_steps':
+        return 'QA reviewer hit the max steps limit before writing a new qa_signoff';
+      case 'error':
+        return errorMessage ?? 'QA reviewer failed before writing a new qa_signoff';
+      default:
+        return errorMessage ?? `QA reviewer ended with outcome: ${outcome}`;
+    }
   }
 
   /**

@@ -54,10 +54,21 @@ interface QASignoff {
   tests_passed: Record<string, unknown>;
   timestamp: string;
   ready_for_qa_revalidation: boolean;
+  [key: string]: unknown;
+}
+
+interface QAStatusLogEntry {
+  status: string;
+  qa_session: number;
+  issues_found: QAIssue[];
+  tests_passed: Record<string, unknown>;
+  timestamp: string;
+  ready_for_qa_revalidation: boolean;
 }
 
 interface ImplementationPlan {
   qa_signoff?: QASignoff;
+  qa_iteration_history?: QAStatusLogEntry[];
   last_updated?: string;
   [key: string]: unknown;
 }
@@ -115,15 +126,41 @@ export const updateQaStatusTool = Tool.define({
       qaSession++;
     }
 
+    const now = new Date().toISOString();
+    const nextIssues =
+      status === 'approved'
+        ? issues
+        : status === 'rejected'
+          ? issues
+          : current?.issues_found ?? [];
+    const nextTests =
+      status === 'approved'
+        ? testsPassed
+        : status === 'rejected'
+          ? testsPassed
+          : current?.tests_passed ?? {};
+
     plan.qa_signoff = {
+      ...(current ?? {}),
       status,
       qa_session: qaSession,
-      issues_found: issues,
-      tests_passed: testsPassed,
-      timestamp: new Date().toISOString(),
+      issues_found: nextIssues,
+      tests_passed: nextTests,
+      timestamp: now,
       ready_for_qa_revalidation: status === 'fixes_applied',
     };
-    plan.last_updated = new Date().toISOString();
+    if (!Array.isArray(plan.qa_iteration_history)) {
+      plan.qa_iteration_history = [];
+    }
+    plan.qa_iteration_history.push({
+      status,
+      qa_session: qaSession,
+      issues_found: nextIssues,
+      tests_passed: nextTests,
+      timestamp: now,
+      ready_for_qa_revalidation: status === 'fixes_applied',
+    });
+    plan.last_updated = now;
 
     try {
       const tmp = `${planFile}.tmp`;
