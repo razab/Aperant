@@ -2,7 +2,7 @@ import { ipcMain, BrowserWindow } from 'electron';
 import { IPC_CHANNELS, AUTO_BUILD_PATHS, getSpecsDir } from '../../../shared/constants';
 import type { IPCResult, TaskStartOptions, TaskStatus, ImageAttachment } from '../../../shared/types';
 import path from 'path';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, statSync, readdirSync, rmdirSync } from 'fs';
 import { spawnSync, execFileSync } from 'child_process';
 import { getToolPath } from '../../cli-tool-manager';
 import { AgentManager } from '../../agent';
@@ -25,6 +25,8 @@ import { getIsolatedGitEnv, detectWorktreeBranch } from '../../utils/git-isolati
 import { cancelFallbackTimer } from '../agent-events-handlers';
 import { readSettingsFile } from '../../settings-utils';
 import type { ProviderAccount } from '../../../shared/types/provider-account';
+
+const GIT_BRANCH_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._/-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$/;
 
 /**
  * Check if any provider account is configured (API key or OAuth).
@@ -50,6 +52,173 @@ function safeReadFileSync(filePath: string): string | null {
     }
     return null;
   }
+}
+
+function normalizeBaseBranch(branch: string | undefined): string | undefined {
+  if (!branch || typeof branch !== 'string') return undefined;
+  const normalized = branch.replace(/^origin\//, '');
+  return GIT_BRANCH_REGEX.test(normalized) ? normalized : undefined;
+}
+
+function getTaskMetadataBaseBranch(specDir: string): string | undefined {
+  try {
+    const metadataPath = path.join(specDir, 'task_metadata.json');
+    if (!existsSync(metadataPath)) return undefined;
+    const metadata = JSON.parse(readFileSync(metadataPath, 'utf-8')) as { baseBranch?: string };
+    return normalizeBaseBranch(metadata.baseBranch);
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveTaskReviewBaseBranch(
+  projectPath: string,
+  specDir: string,
+  taskBaseBranch: string | undefined,
+  projectMainBranch: string | undefined,
+): string | null {
+  const candidates = [
+    normalizeBaseBranch(taskBaseBranch),
+    getTaskMetadataBaseBranch(specDir),
+    normalizeBaseBranch(projectMainBranch),
+    'main',
+    'master',
+  ].filter((branch, index, all): branch is string => !!branch && all.indexOf(branch) === index);
+
+  for (const branch of candidates) {
+    try {
+      execFileSync(getToolPath('git'), ['rev-parse', '--verify', branch], {
+        cwd: projectPath,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: getIsolatedGitEnv(),
+      });
+      return branch;
+    } catch {
+      // Try next candidate
+    }
+  }
+
+  return null;
+}
+
+function isPathInsideRoot(rootPath: string, candidatePath: string): boolean {
+  const resolvedRoot = path.resolve(rootPath);
+  const resolvedCandidate = path.resolve(candidatePath);
+  return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(resolvedRoot + path.sep);
+}
+
+function removeEmptyParentDirectories(filePath: string, rootPath: string): void {
+  let currentDir = path.dirname(filePath);
+  const resolvedRoot = path.resolve(rootPath);
+
+  while (currentDir.startsWith(resolvedRoot + path.sep)) {
+    try {
+      if (readdirSync(currentDir).length > 0) break;
+      rmdirSync(currentDir);
+      currentDir = path.dirname(currentDir);
+    } catch {
+      break;
+    }
+  }
+}
+
+function cleanupRejectedMergeArtifacts(
+  projectPath: string,
+  worktreePath: string,
+  specDir: string,
+  taskBaseBranch: string | undefined,
+  projectMainBranch: string | undefined,
+): { removed: string[]; skipped: string[] } {
+  const baseBranch = resolveTaskReviewBaseBranch(projectPath, specDir, taskBaseBranch, projectMainBranch);
+  if (!baseBranch) {
+    return { removed: [], skipped: ['<base-branch-unresolved>'] };
+  }
+
+  let changedFilesOutput = '';
+  try {
+    changedFilesOutput = execFileSync(getToolPath('git'), ['diff', '--name-only', '--relative', baseBranch], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: getIsolatedGitEnv(),
+    });
+  } catch {
+    return { removed: [], skipped: ['<diff-failed>'] };
+  }
+
+  const changedFiles = changedFilesOutput
+    .split('\n')
+    .map((file) => file.trim())
+    .filter(Boolean);
+
+  const removed: string[] = [];
+  const skipped: string[] = [];
+
+  for (const relativeFile of changedFiles) {
+    if (relativeFile.startsWith('.auto-claude/')) {
+      skipped.push(relativeFile);
+      continue;
+    }
+
+    const mainFilePath = path.resolve(projectPath, relativeFile);
+    const worktreeFilePath = path.resolve(worktreePath, relativeFile);
+
+    if (!isPathInsideRoot(projectPath, mainFilePath) || !isPathInsideRoot(worktreePath, worktreeFilePath)) {
+      skipped.push(relativeFile);
+      continue;
+    }
+
+    if (!existsSync(mainFilePath) || !existsSync(worktreeFilePath)) {
+      skipped.push(relativeFile);
+      continue;
+    }
+
+    try {
+      if (!statSync(mainFilePath).isFile() || !statSync(worktreeFilePath).isFile()) {
+        skipped.push(relativeFile);
+        continue;
+      }
+    } catch {
+      skipped.push(relativeFile);
+      continue;
+    }
+
+    try {
+      const statusOutput = execFileSync(getToolPath('git'), ['status', '--porcelain', '--', relativeFile], {
+        cwd: projectPath,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: getIsolatedGitEnv(),
+      }).trim();
+
+      if (!statusOutput.startsWith('??')) {
+        skipped.push(relativeFile);
+        continue;
+      }
+    } catch {
+      skipped.push(relativeFile);
+      continue;
+    }
+
+    try {
+      const mainContent = readFileSync(mainFilePath);
+      const worktreeContent = readFileSync(worktreeFilePath);
+
+      if (!mainContent.equals(worktreeContent)) {
+        skipped.push(relativeFile);
+        continue;
+      }
+
+      rmSync(mainFilePath, { force: true });
+      removeEmptyParentDirectories(mainFilePath, projectPath);
+      removed.push(relativeFile);
+    } catch {
+      skipped.push(relativeFile);
+    }
+  }
+
+  return { removed, skipped };
 }
 
 /**
@@ -467,16 +636,17 @@ export function registerTaskExecutionHandlers(
             console.log('[TASK_REVIEW] Discarded working tree changes in main');
           }
 
-          // Step 3: Clean untracked files that came from the merge
-          // IMPORTANT: Exclude .auto-claude directory to preserve specs and worktree data
-          const cleanResult = spawnSync(getToolPath('git'), ['clean', '-fd', '-e', '.auto-claude'], {
-            cwd: project.path,
-            encoding: 'utf-8',
-            stdio: 'pipe',
-            env: getIsolatedGitEnv()
-          });
-          if (cleanResult.status === 0) {
-            console.log('[TASK_REVIEW] Cleaned untracked files in main (excluding .auto-claude)');
+          // Step 3: Remove only task-specific untracked artifacts that still match
+          // the worktree version. This preserves unrelated user-created files.
+          const cleanupResult = cleanupRejectedMergeArtifacts(
+            project.path,
+            worktreePath,
+            specDir,
+            task.metadata?.baseBranch,
+            project.settings?.mainBranch,
+          );
+          if (cleanupResult.removed.length > 0) {
+            console.log('[TASK_REVIEW] Removed task merge artifacts from main:', cleanupResult.removed);
           }
 
           console.log('[TASK_REVIEW] Main branch restored to pre-merge state');
