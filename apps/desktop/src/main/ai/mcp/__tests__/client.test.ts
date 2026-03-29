@@ -240,6 +240,16 @@ describe('createMcpClientsForAgent', () => {
 
     expect(mockGetRequiredMcpServers).toHaveBeenCalledWith('qa_reviewer', resolveOptions);
   });
+
+  it('passes registryOptions to resolveMcpServers', async () => {
+    mockGetRequiredMcpServers.mockReturnValueOnce(['context7']);
+    mockResolveMcpServers.mockReturnValueOnce([]);
+
+    const registryOptions = { linearApiKey: 'lin-project-key' };
+    await createMcpClientsForAgent('coder', {}, registryOptions);
+
+    expect(mockResolveMcpServers).toHaveBeenCalledWith(['context7'], registryOptions);
+  });
 });
 
 // =============================================================================

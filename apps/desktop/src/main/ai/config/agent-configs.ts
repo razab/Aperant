@@ -36,7 +36,7 @@ const ALL_BUILTIN_TOOLS = [...BASE_READ_TOOLS, ...BASE_WRITE_TOOLS, ...WEB_TOOLS
 const SPEC_TOOLS = [...BASE_READ_TOOLS, 'Write', ...WEB_TOOLS] as const;
 
 // =============================================================================
-// Auto-Claude MCP Tools (Custom build management)
+// Auto-Claude Builtin Tools (Custom build management)
 // =============================================================================
 
 const TOOL_UPDATE_SUBTASK_STATUS = 'mcp__auto-claude__update_subtask_status';
@@ -160,7 +160,7 @@ export interface AgentConfig {
   mcpServers: readonly string[];
   /** Optional MCP servers (conditionally enabled) */
   mcpServersOptional?: readonly string[];
-  /** Auto-Claude MCP tools this agent can use */
+  /** Builtin auto-claude tools this agent can use */
   autoClaudeTools: readonly string[];
   /** Default thinking level for this agent */
   thinkingDefault: ThinkingLevel;
@@ -246,7 +246,7 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
    */
   build_orchestrator: {
     tools: [...ALL_BUILTIN_TOOLS, 'SpawnSubagent'],
-    mcpServers: ['context7', 'memory', 'auto-claude'],
+    mcpServers: ['context7', 'memory'],
     mcpServersOptional: ['linear'],
     autoClaudeTools: [
       TOOL_GET_BUILD_PROGRESS,
@@ -263,7 +263,7 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
   // ═══════════════════════════════════════════════════════════════════════
   planner: {
     tools: [...ALL_BUILTIN_TOOLS],
-    mcpServers: ['context7', 'memory', 'auto-claude'],
+    mcpServers: ['context7', 'memory'],
     mcpServersOptional: ['linear'],
     autoClaudeTools: [
       TOOL_GET_BUILD_PROGRESS,
@@ -274,7 +274,7 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
   },
   coder: {
     tools: [...ALL_BUILTIN_TOOLS],
-    mcpServers: ['context7', 'memory', 'auto-claude'],
+    mcpServers: ['context7', 'memory'],
     mcpServersOptional: ['linear'],
     autoClaudeTools: [
       TOOL_UPDATE_SUBTASK_STATUS,
@@ -291,7 +291,7 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
   // ═══════════════════════════════════════════════════════════════════════
   qa_reviewer: {
     tools: [...ALL_BUILTIN_TOOLS],
-    mcpServers: ['context7', 'memory', 'auto-claude', 'browser'],
+    mcpServers: ['context7', 'memory', 'browser'],
     mcpServersOptional: ['linear'],
     autoClaudeTools: [
       TOOL_GET_BUILD_PROGRESS,
@@ -302,7 +302,7 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
   },
   qa_fixer: {
     tools: [...ALL_BUILTIN_TOOLS],
-    mcpServers: ['context7', 'memory', 'auto-claude', 'browser'],
+    mcpServers: ['context7', 'memory', 'browser'],
     mcpServersOptional: ['linear'],
     autoClaudeTools: [
       TOOL_UPDATE_SUBTASK_STATUS,
@@ -593,11 +593,11 @@ export function getRequiredMcpServers(
     }
   }
 
-  // Apply per-agent MCP removals (never remove auto-claude)
+  // Apply per-agent MCP removals
   if (options.agentMcpRemove) {
     for (const name of options.agentMcpRemove.split(',')) {
       const mapped = mapMcpServerName(name.trim(), options.customServerIds);
-      if (mapped && mapped !== 'auto-claude') {
+      if (mapped) {
         const idx = servers.indexOf(mapped);
         if (idx !== -1) servers.splice(idx, 1);
       }

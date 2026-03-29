@@ -20,6 +20,7 @@ import { findTaskAndProject } from "./task/shared";
 import { safeSendToRenderer } from "./utils";
 import { getClaudeProfileManager } from "../claude-profile-manager";
 import { taskStateManager } from "../task-state-manager";
+import { resolveActiveExitFallbackEvent } from "./agent-exit-fallback";
 
 // Timeout for fallback safety net to check if task is still stuck after process exit
 const STUCK_TASK_FALLBACK_TIMEOUT_MS = 500;
@@ -126,25 +127,17 @@ export function registerAgenteventsHandlers(
       if (currentState && XSTATE_ACTIVE_STATES.has(currentState)) {
         const { task: checkTask, project: checkProject } = findTaskAndProject(taskId, projectId);
         if (checkTask && checkProject) {
-          if (code === 0) {
-            // Clean exit (code 0) means the task completed successfully but the terminal
-            // event (e.g., QA_PASSED) was lost in transit. Treat as completed, not stopped.
-            console.warn(
-              `[agent-events-handlers] Task ${taskId} still in XState ${currentState} ` +
-              `${STUCK_TASK_FALLBACK_TIMEOUT_MS}ms after clean exit (code 0), forcing QA_PASSED`
-            );
-            taskStateManager.handleUiEvent(taskId, {
-              type: 'QA_PASSED', iteration: 0, testsRun: {}
-            }, checkTask, checkProject);
-          } else {
-            // Non-zero exit code — task was stopped or crashed
-            const hasPlan = hasPlanWithSubtasks(checkProject, checkTask);
-            console.warn(
-              `[agent-events-handlers] Task ${taskId} still in XState ${currentState} ` +
-              `${STUCK_TASK_FALLBACK_TIMEOUT_MS}ms after exit (code ${code}), forcing USER_STOPPED (hasPlan: ${hasPlan})`
-            );
-            taskStateManager.handleUiEvent(taskId, { type: 'USER_STOPPED', hasPlan }, checkTask, checkProject);
-          }
+          const hasPlan = hasPlanWithSubtasks(checkProject, checkTask);
+          console.warn(
+            `[agent-events-handlers] Task ${taskId} still in XState ${currentState} ` +
+            `${STUCK_TASK_FALLBACK_TIMEOUT_MS}ms after exit (code ${code}), forcing USER_STOPPED (hasPlan: ${hasPlan})`
+          );
+          taskStateManager.handleUiEvent(
+            taskId,
+            resolveActiveExitFallbackEvent(code, hasPlan),
+            checkTask,
+            checkProject,
+          );
         }
       }
       // Clean up timer reference after it fires

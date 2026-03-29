@@ -31,6 +31,7 @@ import {
   IMPLEMENTATION_PLAN_SCHEMA_HINT,
 } from '../schema';
 import type { ZodSchema } from 'zod';
+import { isCompletedOutcome } from '../session/outcomes';
 import type { SessionResult } from '../session/types';
 
 // =============================================================================
@@ -470,7 +471,7 @@ export class SpecOrchestrator extends EventEmitter {
         return { phase, success: false, errors: ['Cancelled'], retries: attempt };
       }
 
-      if (result.outcome === 'completed' || result.outcome === 'max_steps' || result.outcome === 'context_window') {
+      if (isCompletedOutcome(result.outcome)) {
         // If the provider returned structured output (via constrained decoding),
         // write it to implementation_plan.json — this is guaranteed to match the
         // schema, overriding whatever the agent wrote via the Write tool.
@@ -549,7 +550,7 @@ export class SpecOrchestrator extends EventEmitter {
       }
 
       // Error — collect and maybe retry
-      const errorMsg = result.error?.message ?? `Phase ${phase} failed with outcome: ${result.outcome}`;
+      const errorMsg = result.error?.message ?? `Phase ${phase} ended before completion: ${result.outcome}`;
       errors.push(errorMsg);
 
       // Non-retryable errors

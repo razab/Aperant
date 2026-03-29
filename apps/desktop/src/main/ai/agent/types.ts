@@ -8,6 +8,8 @@
  */
 
 import type { ExecutionProgressData, ProcessType } from '../../../main/agent/types';
+import type { McpServerResolveOptions } from '../config/agent-configs';
+import type { McpRegistryOptions } from '../mcp/registry';
 import type { SessionConfig, SessionResult, StreamEvent } from '../session/types';
 import type { RunnerOptions } from '../session/runner';
 
@@ -63,17 +65,8 @@ export interface SerializableSessionConfig {
   oauthTokenFilePath?: string;
   /** MCP options resolved from project settings (serialized for worker) */
   mcpOptions?: {
-    context7Enabled?: boolean;
-    memoryEnabled?: boolean;
-    linearEnabled?: boolean;
-    electronMcpEnabled?: boolean;
-    puppeteerMcpEnabled?: boolean;
-    projectCapabilities?: {
-      is_electron?: boolean;
-      is_web_frontend?: boolean;
-    };
-    agentMcpAdd?: string;
-    agentMcpRemove?: string;
+    resolveOptions?: McpServerResolveOptions;
+    registryOptions?: McpRegistryOptions;
   };
   /** Enable agentic orchestration mode where the AI drives the pipeline via SpawnSubagent tool */
   useAgenticOrchestration?: boolean;

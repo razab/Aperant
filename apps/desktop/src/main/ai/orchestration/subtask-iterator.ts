@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { safeParseJson } from '../../utils/json-repair';
 import type { ExtractedInsights, InsightExtractionConfig } from '../runners/insight-extractor';
 import { extractSessionInsights } from '../runners/insight-extractor';
+import { isCompletedOutcome, isIncompleteOutcome } from '../session/outcomes';
 import type { SessionResult } from '../session/types';
 import type { SubtaskInfo } from './build-orchestrator';
 import {
@@ -229,10 +230,10 @@ export async function iterateSubtasks(
       continue;
     }
 
-    // Post-session: if the session completed or hit max_steps (not error), ensure the
+    // Post-session: if the session completed, ensure the
     // subtask is marked as completed. The coder agent is instructed to update
     // implementation_plan.json itself, but it doesn't always do so reliably.
-    if (result.outcome === 'completed' || result.outcome === 'max_steps' || result.outcome === 'context_window') {
+    if (isCompletedOutcome(result.outcome)) {
       await ensureSubtaskMarkedCompleted(config.specDir, subtask.id);
 
       // Re-stamp executionPhase on the worktree plan after the coder session.
@@ -253,6 +254,8 @@ export async function iterateSubtasks(
           if (insights) config.onInsightsExtracted?.(subtask.id, insights);
         }).catch(() => { /* insight extraction is non-blocking */ });
       }
+    } else if (isIncompleteOutcome(result.outcome)) {
+      await ensureSubtaskRemainsIncomplete(config.specDir, subtask.id);
     }
 
     // For errors, the subtask will be retried on next loop iteration
@@ -316,6 +319,34 @@ async function ensureSubtaskMarkedCompleted(
     }
   } catch {
     // Non-fatal: if we can't update the plan the loop will retry or mark stuck
+  }
+}
+
+async function ensureSubtaskRemainsIncomplete(
+  specDir: string,
+  subtaskId: string,
+): Promise<void> {
+  const planPath = join(specDir, 'implementation_plan.json');
+  try {
+    const raw = await readFile(planPath, 'utf-8');
+    const plan = safeParseJson<ImplementationPlan>(raw);
+    if (!plan) return;
+    let updated = false;
+
+    for (const phase of plan.phases) {
+      for (const subtask of phase.subtasks) {
+        if (subtask.id === subtaskId && subtask.status === 'completed') {
+          subtask.status = 'in_progress';
+          updated = true;
+        }
+      }
+    }
+
+    if (updated) {
+      await writeFile(planPath, JSON.stringify(plan, null, 2));
+    }
+  } catch {
+    // Non-fatal: retry loop will still mark the subtask stuck if needed
   }
 }
 
@@ -487,7 +518,7 @@ async function extractInsightsAfterSession(
       subtaskId: subtask.id,
       subtaskDescription: subtask.description,
       sessionNum: 1,
-      success: result.outcome === 'completed' || result.outcome === 'max_steps' || result.outcome === 'context_window',
+      success: isCompletedOutcome(result.outcome),
       diff: '',           // Diff gathering requires git; left empty for now
       changedFiles: [],   // Populated by future git integration
       commitMessages: '',

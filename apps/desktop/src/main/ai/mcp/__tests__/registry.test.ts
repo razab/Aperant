@@ -105,25 +105,9 @@ describe('getMcpServerConfig', () => {
   });
 
   describe('auto-claude', () => {
-    it('returns auto-claude config with empty specDir as default', () => {
+    it('does not resolve auto-claude as an MCP server anymore', () => {
       const config = getMcpServerConfig('auto-claude', {});
-      expect(config).not.toBeNull();
-      expect(config?.id).toBe('auto-claude');
-    });
-
-    it('injects SPEC_DIR into transport env', () => {
-      const config = getMcpServerConfig('auto-claude', { specDir: '/project/.auto-claude/specs/001-feature' });
-      expect(config?.transport.type).toBe('stdio');
-      if (config?.transport.type === 'stdio') {
-        expect(config.transport.env?.SPEC_DIR).toBe('/project/.auto-claude/specs/001-feature');
-      }
-    });
-
-    it('uses node command', () => {
-      const config = getMcpServerConfig('auto-claude', {});
-      if (config?.transport.type === 'stdio') {
-        expect(config.transport.command).toBe('node');
-      }
+      expect(config).toBeNull();
     });
   });
 
@@ -174,12 +158,48 @@ describe('resolveMcpServers', () => {
     expect(configs[0].id).toBe('memory');
   });
 
-  it('passes specDir through to auto-claude config', () => {
+  it('filters out auto-claude because it is now builtin', () => {
     const specDir = '/my-project/.auto-claude/specs/042-auth';
     const configs = resolveMcpServers(['auto-claude'], { specDir });
+    expect(configs).toEqual([]);
+  });
+
+  it('resolves custom command MCP servers from registry options', () => {
+    const configs = resolveMcpServers(['my-command'], {
+      customServers: [
+        {
+          id: 'my-command',
+          name: 'My Command Server',
+          type: 'command',
+          command: 'npx',
+          args: ['-y', 'my-server'],
+        },
+      ],
+    });
+
     expect(configs).toHaveLength(1);
-    if (configs[0].transport.type === 'stdio') {
-      expect(configs[0].transport.env?.SPEC_DIR).toBe(specDir);
+    expect(configs[0].id).toBe('my-command');
+    expect(configs[0].transport.type).toBe('stdio');
+  });
+
+  it('resolves custom HTTP MCP servers from registry options', () => {
+    const configs = resolveMcpServers(['my-http'], {
+      customServers: [
+        {
+          id: 'my-http',
+          name: 'My HTTP Server',
+          type: 'http',
+          url: 'https://mcp.example.com',
+          headers: { Authorization: 'Bearer 123' },
+        },
+      ],
+    });
+
+    expect(configs).toHaveLength(1);
+    expect(configs[0].id).toBe('my-http');
+    expect(configs[0].transport.type).toBe('streamable-http');
+    if (configs[0].transport.type === 'streamable-http') {
+      expect(configs[0].transport.headers).toEqual({ Authorization: 'Bearer 123' });
     }
   });
 });

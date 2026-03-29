@@ -32,6 +32,7 @@ import {
   IMPLEMENTATION_PLAN_SCHEMA_HINT,
 } from '../schema';
 import { safeParseJson } from '../../utils/json-repair';
+import { isCompletedOutcome } from '../session/outcomes';
 import type { SessionResult } from '../session/types';
 import { iterateSubtasks } from './subtask-iterator';
 import type { SubtaskIteratorConfig, SubtaskResult } from './subtask-iterator';
@@ -341,7 +342,7 @@ export class BuildOrchestrator extends EventEmitter {
         return { success: false, error: 'Build cancelled' };
       }
 
-      if (result.outcome === 'error' || result.outcome === 'auth_failure' || result.outcome === 'rate_limited') {
+      if (!isCompletedOutcome(result.outcome)) {
         return { success: false, error: result.error?.message ?? 'Planning session failed' };
       }
 
@@ -472,10 +473,10 @@ export class BuildOrchestrator extends EventEmitter {
       return { success: false, error: 'Build cancelled' };
     }
 
-    if (iteratorResult.stuckSubtasks.length > 0 && iteratorResult.completedSubtasks === 0) {
+    if (iteratorResult.stuckSubtasks.length > 0) {
       return {
         success: false,
-        error: `All subtasks stuck: ${iteratorResult.stuckSubtasks.join(', ')}`,
+        error: `Stuck subtasks: ${iteratorResult.stuckSubtasks.join(', ')}`,
       };
     }
 
@@ -527,6 +528,13 @@ export class BuildOrchestrator extends EventEmitter {
         return { success: false, error: 'Build cancelled' };
       }
 
+      if (!isCompletedOutcome(reviewResult.outcome)) {
+        return {
+          success: false,
+          error: reviewResult.error?.message ?? `QA review session ended before completion: ${reviewResult.outcome}`,
+        };
+      }
+
       // Check QA result
       const qaStatus = await this.readQAStatus();
 
@@ -563,6 +571,13 @@ export class BuildOrchestrator extends EventEmitter {
         });
 
         this.emitTyped('session-complete', fixResult, 'qa_fixing');
+
+        if (!isCompletedOutcome(fixResult.outcome)) {
+          return {
+            success: false,
+            error: fixResult.error?.message ?? `QA fixer session ended before completion: ${fixResult.outcome}`,
+          };
+        }
         this.markPhaseCompleted('qa_fixing');
 
         // Delete qa_report.md before re-review so the reviewer writes a clean verdict.

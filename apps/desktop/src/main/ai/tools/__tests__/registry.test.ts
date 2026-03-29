@@ -14,10 +14,13 @@ import {
   MEMORY_MCP_TOOLS, GRAPHITI_MCP_TOOLS,
   PUPPETEER_TOOLS,
   ELECTRON_TOOLS,
+  TOOL_GET_BUILD_PROGRESS,
+  TOOL_GET_SESSION_CONTEXT,
   type AgentType,
 } from '../registry';
 import type { DefinedTool } from '../define';
 import type { ToolContext } from '../types';
+import { buildToolRegistry } from '../build-registry';
 
 // =============================================================================
 // Helpers
@@ -93,6 +96,14 @@ describe('AGENT_CONFIGS (registry)', () => {
 // =============================================================================
 
 describe('ToolRegistry', () => {
+  it('buildToolRegistry should register builtin auto-claude tools', () => {
+    const registry = buildToolRegistry();
+    const names = registry.getRegisteredNames();
+
+    expect(names).toContain(TOOL_GET_BUILD_PROGRESS);
+    expect(names).toContain(TOOL_GET_SESSION_CONTEXT);
+  });
+
   it('should register and retrieve tools', () => {
     const registry = new ToolRegistry();
     const mockTool = createMockDefinedTool('Read');
@@ -156,6 +167,24 @@ describe('ToolRegistry', () => {
     registry.getToolsForAgent('spec_critic', context);
 
     expect(mockTool.bind).toHaveBeenCalledWith(context);
+  });
+
+  it('should include builtin auto-claude tools for agents that declare them', () => {
+    const registry = new ToolRegistry();
+    const progressTool = createMockDefinedTool(TOOL_GET_BUILD_PROGRESS);
+    const contextTool = createMockDefinedTool(TOOL_GET_SESSION_CONTEXT);
+
+    registry.registerTool(TOOL_GET_BUILD_PROGRESS, progressTool);
+    registry.registerTool(TOOL_GET_SESSION_CONTEXT, contextTool);
+
+    const context = createMockContext();
+    const tools = registry.getToolsForAgent('planner', context);
+
+    expect(Object.keys(tools)).toEqual(
+      expect.arrayContaining([TOOL_GET_BUILD_PROGRESS, TOOL_GET_SESSION_CONTEXT]),
+    );
+    expect(progressTool.bind).toHaveBeenCalledWith(context);
+    expect(contextTool.bind).toHaveBeenCalledWith(context);
   });
 
   it('should return empty record for agents with no tools', () => {
@@ -251,12 +280,11 @@ describe('getRequiredMcpServers (registry)', () => {
     expect(servers).toContain('context7');
   });
 
-  it('should support per-agent MCP REMOVE overrides but protect auto-claude', () => {
+  it('should support per-agent MCP REMOVE overrides', () => {
     const servers = getRequiredMcpServers('coder', {
       memoryEnabled: true,
       mcpConfig: { AGENT_MCP_coder_REMOVE: 'auto-claude,memory' },
     });
-    expect(servers).toContain('auto-claude');
     expect(servers).not.toContain('memory');
   });
 });

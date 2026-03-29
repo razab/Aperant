@@ -87,12 +87,14 @@ describe('AGENT_CONFIGS', () => {
     expect(config.thinkingDefault).toBe('low');
   });
 
-  it('should configure planner with memory and auto-claude MCP', () => {
+  it('should configure planner with memory MCP and builtin auto-claude tools', () => {
     const config = AGENT_CONFIGS.planner;
     expect(config.mcpServers).toContain('context7');
     expect(config.mcpServers).toContain('memory');
-    expect(config.mcpServers).toContain('auto-claude');
+    expect(config.mcpServers).not.toContain('auto-claude');
     expect(config.mcpServersOptional).toContain('linear');
+    expect(config.autoClaudeTools).toContain('mcp__auto-claude__get_build_progress');
+    expect(config.autoClaudeTools).toContain('mcp__auto-claude__get_session_context');
     expect(config.thinkingDefault).toBe('high');
   });
 
@@ -291,12 +293,11 @@ describe('getRequiredMcpServers', () => {
     expect(servers).toContain('context7');
   });
 
-  it('should support per-agent MCP removals but never remove auto-claude', () => {
+  it('should support per-agent MCP removals', () => {
     const servers = getRequiredMcpServers('coder', {
       memoryEnabled: true,
       agentMcpRemove: 'auto-claude,memory',
     });
-    expect(servers).toContain('auto-claude');
     expect(servers).not.toContain('memory');
   });
 });

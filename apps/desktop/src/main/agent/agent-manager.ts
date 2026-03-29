@@ -25,6 +25,7 @@ import type { BuiltinProvider } from '../../shared/types/provider-account';
 import type { AgentExecutorConfig, SerializableSessionConfig, SerializedSecurityProfile } from '../ai/agent/types';
 import { getSecurityProfile } from '../ai/security/security-profile';
 import { createOrGetWorktree } from '../ai/worktree';
+import { buildSerializableMcpOptions } from '../ai/mcp/session-config';
 import { findTaskWorktree } from '../worktree-paths';
 import { readSettingsFile } from '../settings-utils';
 import type { ProviderAccount } from '../../shared/types/provider-account';
@@ -377,6 +378,7 @@ export class AgentManager extends EventEmitter {
 
     // Resolve auth from provider accounts priority queue (falls back to legacy profile)
     const resolved = await this.resolveAuthFromProviderQueue(specModelId, preferredProvider);
+    const project = projectStore.getProjects().find((p) => p.id === projectId || p.path === projectPath);
 
     // Build the serializable session config for the worker
     const resolvedSpecDir = specDir ?? path.join(projectPath, '.auto-claude', 'specs', taskId);
@@ -399,11 +401,11 @@ export class AgentManager extends EventEmitter {
       baseURL: resolved.auth?.baseURL,
       configDir: resolved.configDir,
       oauthTokenFilePath: resolved.auth?.oauthTokenFilePath,
-      mcpOptions: {
-        context7Enabled: true,
-        memoryEnabled: !!process.env.GRAPHITI_MCP_URL,
-        linearEnabled: !!process.env.LINEAR_API_KEY,
-      },
+      mcpOptions: buildSerializableMcpOptions({
+        agentType: 'spec_orchestrator',
+        projectDir: projectPath,
+        autoBuildPath: project?.autoBuildPath,
+      }),
       toolContext: {
         cwd: projectPath,
         projectDir: projectPath,
@@ -523,11 +525,11 @@ export class AgentManager extends EventEmitter {
       baseURL: resolved.auth?.baseURL,
       configDir: resolved.configDir,
       oauthTokenFilePath: resolved.auth?.oauthTokenFilePath,
-      mcpOptions: {
-        context7Enabled: true,
-        memoryEnabled: !!process.env.GRAPHITI_MCP_URL,
-        linearEnabled: !!process.env.LINEAR_API_KEY,
-      },
+      mcpOptions: buildSerializableMcpOptions({
+        agentType: 'build_orchestrator',
+        projectDir: projectPath,
+        autoBuildPath: project?.autoBuildPath,
+      }),
       toolContext: {
         cwd: effectiveCwd,
         projectDir: effectiveProjectDir,
@@ -626,11 +628,11 @@ export class AgentManager extends EventEmitter {
       baseURL: resolved.auth?.baseURL,
       configDir: resolved.configDir,
       oauthTokenFilePath: resolved.auth?.oauthTokenFilePath,
-      mcpOptions: {
-        context7Enabled: true,
-        memoryEnabled: !!process.env.GRAPHITI_MCP_URL,
-        linearEnabled: !!process.env.LINEAR_API_KEY,
-      },
+      mcpOptions: buildSerializableMcpOptions({
+        agentType: 'qa_reviewer',
+        projectDir: projectPath,
+        autoBuildPath: project?.autoBuildPath,
+      }),
       toolContext: {
         cwd: effectiveCwd,
         projectDir: effectiveProjectDir,

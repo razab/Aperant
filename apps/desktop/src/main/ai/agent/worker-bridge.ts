@@ -24,6 +24,7 @@ import type {
   AgentExecutorConfig,
 } from './types';
 import type { SessionResult } from '../session/types';
+import { isCompletedOutcome } from '../session/outcomes';
 import { ProgressTracker } from '../session/progress-tracker';
 
 // ESM-compatible __dirname
@@ -215,7 +216,7 @@ export class WorkerBridge extends EventEmitter {
    */
   private handleResult(taskId: string, result: SessionResult, projectId?: string): void {
     // Map outcome to exit code
-    const exitCode = result.outcome === 'completed' || result.outcome === 'max_steps' || result.outcome === 'context_window' ? 0 : 1;
+    const exitCode = isCompletedOutcome(result.outcome) ? 0 : 1;
 
     // Log the result summary
     const summary = `Session complete: outcome=${result.outcome}, steps=${result.stepsExecuted}, tools=${result.toolCallCount}, duration=${result.durationMs}ms`;

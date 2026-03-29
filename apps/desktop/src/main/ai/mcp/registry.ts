@@ -9,6 +9,7 @@
  * and whether it's enabled by default.
  */
 
+import type { CustomMcpServer } from '../../../shared/types/project';
 import type { McpServerConfig, McpServerId } from './types';
 
 // =============================================================================
@@ -99,39 +100,52 @@ const PUPPETEER_SERVER: McpServerConfig = {
   },
 };
 
-/**
- * Auto-Claude MCP server - custom build management tools.
- * Used by planner, coder, and QA agents for build progress tracking.
- */
-function createAutoClaudeServer(specDir: string): McpServerConfig {
-  return {
-    id: 'auto-claude',
-    name: 'Aperant',
-    description: 'Build management tools (progress tracking, session context)',
-    enabledByDefault: true,
-    transport: {
-      type: 'stdio',
-      command: 'node',
-      args: ['auto-claude-mcp-server.js'],
-      env: { SPEC_DIR: specDir },
-    },
-  };
-}
-
 // =============================================================================
 // Registry
 // =============================================================================
 
 /** Options for resolving MCP server configurations */
 export interface McpRegistryOptions {
-  /** Spec directory for auto-claude MCP server */
+  /** Reserved for backward compatibility; builtin auto-claude tools no longer use MCP */
   specDir?: string;
   /** Memory MCP server URL (if enabled) */
   memoryMcpUrl?: string;
   /** Linear API key (if available) */
   linearApiKey?: string;
+  /** Custom MCP servers defined in project settings */
+  customServers?: CustomMcpServer[];
   /** Environment variables for server processes */
   env?: Record<string, string>;
+}
+
+function createCustomServerConfig(server: CustomMcpServer): McpServerConfig | null {
+  if (server.type === 'command') {
+    if (!server.command) return null;
+    return {
+      id: server.id,
+      name: server.name,
+      description: server.description,
+      enabledByDefault: false,
+      transport: {
+        type: 'stdio',
+        command: server.command,
+        args: server.args,
+      },
+    };
+  }
+
+  if (!server.url) return null;
+  return {
+    id: server.id,
+    name: server.name,
+    description: server.description,
+    enabledByDefault: false,
+    transport: {
+      type: 'streamable-http',
+      url: server.url,
+      headers: server.headers,
+    },
+  };
 }
 
 /**
@@ -145,6 +159,11 @@ export function getMcpServerConfig(
   serverId: McpServerId | string,
   options: McpRegistryOptions = {},
 ): McpServerConfig | null {
+  const customServer = options.customServers?.find((server) => server.id === serverId);
+  if (customServer) {
+    return createCustomServerConfig(customServer);
+  }
+
   switch (serverId) {
     case 'context7':
       return CONTEXT7_SERVER;
@@ -175,10 +194,8 @@ export function getMcpServerConfig(
     case 'puppeteer':
       return PUPPETEER_SERVER;
 
-    case 'auto-claude': {
-      const specDir = options.specDir ?? '';
-      return createAutoClaudeServer(specDir);
-    }
+    case 'auto-claude':
+      return null;
 
     default:
       return null;

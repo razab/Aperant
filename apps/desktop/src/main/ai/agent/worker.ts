@@ -48,6 +48,7 @@ import { loadProjectInstructions, injectContext } from '../prompts/prompt-loader
 import { createMcpClientsForAgent, mergeMcpTools, closeAllMcpClients } from '../mcp/client';
 import type { McpClientResult } from '../mcp/types';
 import { runProjectIndexer } from '../project/project-indexer';
+import { isCompletedOutcome } from '../session/outcomes';
 
 // =============================================================================
 // Validation
@@ -360,7 +361,7 @@ async function runSingleSession(
 
   // End phase logging — mark as completed or failed based on outcome (skip when orchestrator manages phases)
   if (logWriter && !skipPhaseLogging) {
-    const success = sessionResult.outcome === 'completed' || sessionResult.outcome === 'max_steps' || sessionResult.outcome === 'context_window';
+    const success = isCompletedOutcome(sessionResult.outcome);
     logWriter.endPhase(phase, success);
   }
   if (logWriter) {
@@ -386,16 +387,11 @@ async function run(): Promise<void> {
 
     // Initialize MCP clients from session config
     try {
-      mcpClients = await createMcpClientsForAgent(session.agentType, {
-        context7Enabled: session.mcpOptions?.context7Enabled ?? true,
-        memoryEnabled: session.mcpOptions?.memoryEnabled ?? false,
-        linearEnabled: session.mcpOptions?.linearEnabled ?? false,
-        electronMcpEnabled: session.mcpOptions?.electronMcpEnabled ?? false,
-        puppeteerMcpEnabled: session.mcpOptions?.puppeteerMcpEnabled ?? false,
-        projectCapabilities: session.mcpOptions?.projectCapabilities,
-        agentMcpAdd: session.mcpOptions?.agentMcpAdd,
-        agentMcpRemove: session.mcpOptions?.agentMcpRemove,
-      });
+      mcpClients = await createMcpClientsForAgent(
+        session.agentType,
+        session.mcpOptions?.resolveOptions ?? {},
+        session.mcpOptions?.registryOptions ?? {},
+      );
       if (mcpClients.length > 0) {
         postLog(`MCP initialized: ${mcpClients.map(c => c.serverId).join(', ')}`);
       }
@@ -525,7 +521,7 @@ async function runDefaultSession(
     });
   } finally {
     if (logWriter) {
-      const success = result?.outcome === 'completed' || result?.outcome === 'max_steps' || result?.outcome === 'context_window';
+      const success = isCompletedOutcome(result?.outcome);
       logWriter.endPhase(defaultPhase, success ?? false);
     }
   }
@@ -1121,7 +1117,7 @@ async function runAgenticSpecOrchestrator(
     });
   } finally {
     if (logWriter) {
-      const success = result?.outcome === 'completed' || result?.outcome === 'max_steps' || result?.outcome === 'context_window';
+      const success = isCompletedOutcome(result?.outcome);
       logWriter.endPhase('spec', success ?? false);
       logWriter.flush();
     }
