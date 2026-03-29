@@ -39,6 +39,80 @@ function isOAuthToken(token: string | undefined): boolean {
 }
 
 // =============================================================================
+// Anthropic OAuth System Prompt Injection
+// =============================================================================
+
+/**
+ * The Claude Code identity string that Anthropic's API requires as the first
+ * system block for OAuth tokens to access Opus/Sonnet models.
+ * Must be a SEPARATE system block (not combined with other text).
+ */
+const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
+
+/**
+ * Creates a fetch interceptor that injects the Claude Code identity as a
+ * separate first system block in Anthropic API requests.
+ *
+ * Anthropic's API validates that OAuth tokens include this identity as an
+ * exact-match first system block to access Opus/Sonnet models.
+ */
+function createOAuthSystemPromptFetch(): typeof globalThis.fetch {
+  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    if (init?.method?.toUpperCase() === 'POST' && init.body) {
+      try {
+        const bodyStr = typeof init.body === 'string'
+          ? init.body
+          : init.body instanceof ArrayBuffer
+            ? new TextDecoder().decode(init.body)
+            : null;
+
+        if (bodyStr !== null) {
+          const body = JSON.parse(bodyStr);
+
+          if (body.messages) {
+            let modified = false;
+
+            if (Array.isArray(body.system)) {
+              // Array system — check if identity block already present
+              const hasIdentity = body.system.length > 0
+                && body.system[0]?.type === 'text'
+                && body.system[0]?.text === CLAUDE_CODE_IDENTITY;
+
+              if (!hasIdentity) {
+                body.system = [
+                  { type: 'text', text: CLAUDE_CODE_IDENTITY },
+                  ...body.system,
+                ];
+                modified = true;
+              }
+            } else if (typeof body.system === 'string') {
+              // String system — convert to array with identity prepended
+              body.system = [
+                { type: 'text', text: CLAUDE_CODE_IDENTITY },
+                { type: 'text', text: body.system },
+              ];
+              modified = true;
+            } else if (body.system === undefined) {
+              // No system prompt — add identity block
+              body.system = [{ type: 'text', text: CLAUDE_CODE_IDENTITY }];
+              modified = true;
+            }
+
+            if (modified) {
+              init = { ...init, body: JSON.stringify(body) };
+            }
+          }
+        }
+      } catch {
+        // JSON parse failed — pass through unchanged
+      }
+    }
+
+    return globalThis.fetch(input, init);
+  };
+}
+
+// =============================================================================
 // Provider Instance Creators
 // =============================================================================
 
@@ -61,6 +135,8 @@ function createProviderInstance(config: ProviderConfig) {
             ...headers,
             'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14',
           },
+          // Inject Claude Code identity system block for Opus/Sonnet model access
+          fetch: createOAuthSystemPromptFetch(),
         });
       }
       return createAnthropic({

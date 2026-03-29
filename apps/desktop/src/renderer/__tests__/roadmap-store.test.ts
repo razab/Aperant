@@ -3,7 +3,14 @@
  * Tests Zustand store for roadmap state management including drag-and-drop actions
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { useRoadmapStore, getFeaturesByPhase, getFeaturesByPriority, getFeatureStats, resetActors } from '../stores/roadmap-store';
+import {
+  useRoadmapStore,
+  getFeaturesByPhase,
+  getFeaturesByPriority,
+  getFeatureStats,
+  loadRoadmap,
+  resetActors,
+} from '../stores/roadmap-store';
 import type {
   Roadmap,
   RoadmapFeature,
@@ -27,6 +34,7 @@ function createTestFeature(overrides: Partial<RoadmapFeature> = {}): RoadmapFeat
     status: 'under_review' as RoadmapFeatureStatus,
     acceptanceCriteria: ['Test criteria'],
     userStories: ['As a user, I want to test'],
+    source: { provider: 'internal' },
     ...overrides
   };
 }
@@ -70,6 +78,28 @@ function createTestRoadmap(overrides: Partial<Roadmap> = {}): Roadmap {
   };
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+function setElectronApiMock(electronAPI: Record<string, unknown>): void {
+  vi.stubGlobal('window', {
+    electronAPI,
+    DEBUG: false,
+  });
+}
+
 describe('Roadmap Store', () => {
   beforeEach(() => {
     // Reset store to initial state before each test
@@ -80,12 +110,14 @@ describe('Roadmap Store', () => {
         phase: 'idle',
         progress: 0,
         message: ''
-      }
+      },
+      currentProjectId: null
     });
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
     // Reset XState actors to prevent test pollution
     resetActors();
   });
@@ -106,6 +138,85 @@ describe('Roadmap Store', () => {
       useRoadmapStore.getState().setRoadmap(null);
 
       expect(useRoadmapStore.getState().roadmap).toBeNull();
+    });
+  });
+
+  describe('loadRoadmap', () => {
+    it('ignores a stale roadmap response after switching projects', async () => {
+      const roadmapA = createTestRoadmap({ id: 'roadmap-a', projectId: 'project-a', projectName: 'Project A' });
+      const roadmapB = createTestRoadmap({ id: 'roadmap-b', projectId: 'project-b', projectName: 'Project B' });
+      const deferredRoadmapA = createDeferred<{ success: true; data: Roadmap }>();
+
+      const getRoadmapStatus = vi.fn().mockResolvedValue({ success: true, data: { isRunning: false } });
+      const getRoadmap = vi.fn((projectId: string) => {
+        if (projectId === 'project-a') return deferredRoadmapA.promise;
+        return Promise.resolve({ success: true, data: roadmapB });
+      });
+
+      setElectronApiMock({
+        getRoadmapStatus,
+        loadRoadmapProgress: vi.fn(),
+        getRoadmap,
+        getTasks: vi.fn().mockResolvedValue({ success: true, data: [] }),
+        saveRoadmap: vi.fn(),
+      });
+
+      const loadProjectA = loadRoadmap('project-a');
+      await flushPromises();
+
+      await loadRoadmap('project-b');
+      expect(useRoadmapStore.getState().roadmap?.projectId).toBe('project-b');
+
+      deferredRoadmapA.resolve({ success: true, data: roadmapA });
+      await loadProjectA;
+
+      expect(useRoadmapStore.getState().currentProjectId).toBe('project-b');
+      expect(useRoadmapStore.getState().roadmap?.projectId).toBe('project-b');
+    });
+
+    it('skips stale reconcile writes after switching projects', async () => {
+      const roadmapA = createTestRoadmap({
+        id: 'roadmap-a',
+        projectId: 'project-a',
+        projectName: 'Project A',
+        features: [
+          createTestFeature({
+            id: 'feature-a',
+            linkedSpecId: 'spec-a',
+            status: 'in_progress',
+          }),
+        ],
+      });
+      const roadmapB = createTestRoadmap({ id: 'roadmap-b', projectId: 'project-b', projectName: 'Project B' });
+      const deferredTasksA = createDeferred<{ success: true; data: Array<Record<string, unknown>> }>();
+      const saveRoadmap = vi.fn().mockResolvedValue({ success: true });
+
+      setElectronApiMock({
+        getRoadmapStatus: vi.fn().mockResolvedValue({ success: true, data: { isRunning: false } }),
+        loadRoadmapProgress: vi.fn(),
+        getRoadmap: vi.fn((projectId: string) => Promise.resolve({
+          success: true,
+          data: projectId === 'project-a' ? roadmapA : roadmapB,
+        })),
+        getTasks: vi.fn((projectId: string) => {
+          if (projectId === 'project-a') return deferredTasksA.promise;
+          return Promise.resolve({ success: true, data: [] });
+        }),
+        saveRoadmap,
+      });
+
+      const loadProjectA = loadRoadmap('project-a');
+      await flushPromises();
+
+      await loadRoadmap('project-b');
+      deferredTasksA.resolve({
+        success: true,
+        data: [{ id: 'other-task', specId: 'other-task', status: 'pending' }],
+      });
+      await loadProjectA;
+
+      expect(useRoadmapStore.getState().roadmap?.projectId).toBe('project-b');
+      expect(saveRoadmap).not.toHaveBeenCalledWith('project-a', expect.anything());
     });
   });
 

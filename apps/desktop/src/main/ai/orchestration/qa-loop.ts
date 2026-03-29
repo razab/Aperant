@@ -25,6 +25,7 @@ import {
   generateManualTestPlan,
   generateQAReport,
 } from './qa-reports';
+import { DEFAULT_MAX_QA_ITERATIONS } from './qa-constants';
 
 import type { AgentType } from '../config/agent-configs';
 import type { Phase } from '../config/types';
@@ -35,9 +36,6 @@ import type { SessionResult } from '../session/types';
 // =============================================================================
 // Constants
 // =============================================================================
-
-/** Maximum QA review/fix iterations before escalating to human */
-const MAX_QA_ITERATIONS = 50;
 
 /** Stop after this many consecutive errors without progress */
 const MAX_CONSECUTIVE_ERRORS = 3;
@@ -194,7 +192,7 @@ export class QALoop extends EventEmitter {
    */
   async run(): Promise<QAOutcome> {
     const startTime = Date.now();
-    const maxIterations = this.config.maxIterations ?? MAX_QA_ITERATIONS;
+    const maxIterations = this.config.maxIterations ?? DEFAULT_MAX_QA_ITERATIONS;
 
     try {
       // Verify build is complete
@@ -441,7 +439,7 @@ export class QALoop extends EventEmitter {
 
     const fixPrompt = await this.config.generatePrompt('qa_fixer', {
       iteration: 0,
-      maxIterations: this.config.maxIterations ?? MAX_QA_ITERATIONS,
+      maxIterations: this.config.maxIterations ?? DEFAULT_MAX_QA_ITERATIONS,
       isHumanFeedback: true,
     });
 

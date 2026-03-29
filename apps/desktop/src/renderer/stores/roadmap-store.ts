@@ -194,6 +194,10 @@ const initialGenerationStatus: RoadmapGenerationStatus = {
   message: ''
 };
 
+function isRoadmapProjectStale(projectId: string): boolean {
+  return useRoadmapStore.getState().currentProjectId !== projectId;
+}
+
 /**
  * Derive RoadmapGenerationStatus from the generation actor's current snapshot.
  */
@@ -663,6 +667,8 @@ export const useRoadmapStore = create<RoadmapState>((set) => ({
  * or if the app crashed mid-operation.
  */
 async function reconcileLinkedFeatures(projectId: string, roadmap: Roadmap): Promise<void> {
+  if (isRoadmapProjectStale(projectId)) return;
+
   const store = useRoadmapStore.getState();
 
   // Find features that have a linkedSpecId but aren't done yet (or are done without taskOutcome)
@@ -675,6 +681,7 @@ async function reconcileLinkedFeatures(projectId: string, roadmap: Roadmap): Pro
   // Fetch current tasks for the project
   const tasksResult = await window.electronAPI.getTasks(projectId);
   if (!tasksResult.success || !tasksResult.data) return;
+  if (isRoadmapProjectStale(projectId)) return;
 
   // Guard against empty task list (e.g., specs directory temporarily inaccessible)
   // to avoid falsely marking all linked features as 'deleted'
@@ -684,6 +691,8 @@ async function reconcileLinkedFeatures(projectId: string, roadmap: Roadmap): Pro
   let hasChanges = false;
 
   for (const feature of featuresNeedingReconciliation) {
+    if (isRoadmapProjectStale(projectId)) return;
+
     // Safe: linkedSpecId is guaranteed to exist by the filter above
     const linkedSpecId = feature.linkedSpecId;
     if (!linkedSpecId) continue;
@@ -712,6 +721,8 @@ async function reconcileLinkedFeatures(projectId: string, roadmap: Roadmap): Pro
   }
 
   if (hasChanges) {
+    if (isRoadmapProjectStale(projectId)) return;
+
     const updatedRoadmap = useRoadmapStore.getState().roadmap;
     if (updatedRoadmap) {
       console.log('[Roadmap] Reconciled linked features with task states');
@@ -733,9 +744,11 @@ export async function loadRoadmap(projectId: string): Promise<void> {
   // Query if roadmap generation is currently running for this project
   // This restores the generation status when switching back to a project
   const statusResult = await window.electronAPI.getRoadmapStatus(projectId);
+  if (isRoadmapProjectStale(projectId)) return;
   if (statusResult.success && statusResult.data?.isRunning) {
     // Generation is running - try to load persisted progress for more accurate state
     const progressResult = await window.electronAPI.loadRoadmapProgress(projectId);
+    if (isRoadmapProjectStale(projectId)) return;
     if (progressResult.success && progressResult.data) {
       // Restore full progress state including timestamps
       const persistedProgress = progressResult.data;
@@ -774,6 +787,7 @@ export async function loadRoadmap(projectId: string): Promise<void> {
   }
 
   const result = await window.electronAPI.getRoadmap(projectId);
+  if (isRoadmapProjectStale(projectId)) return;
   if (result.success && result.data) {
     // Migrate roadmap to latest schema if needed
     const migratedRoadmap = migrateRoadmapIfNeeded(result.data);
@@ -788,6 +802,7 @@ export async function loadRoadmap(projectId: string): Promise<void> {
 
     // Reconcile features with linked tasks that may have been completed/deleted
     await reconcileLinkedFeatures(projectId, migratedRoadmap);
+    if (isRoadmapProjectStale(projectId)) return;
 
     // Extract and set competitor analysis separately if present
     if (migratedRoadmap.competitorAnalysis) {

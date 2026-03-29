@@ -20,9 +20,9 @@
 
 import type { ZodSchema, ZodError } from 'zod';
 import type { LanguageModel } from 'ai';
-import { readFile, writeFile, mkdtemp, rename, unlink } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { readFile, writeFile, rename, unlink } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { safeParseJson } from '../../utils/json-repair';
 
 // =============================================================================
@@ -75,6 +75,23 @@ export interface StructuredOutputValidation<T> {
   errors: string[];
   /** The raw data before validation (for debugging) */
   raw?: unknown;
+}
+
+async function writeJsonAtomicallyInPlace(
+  filePath: string,
+  data: unknown,
+): Promise<void> {
+  const tempFile = join(
+    dirname(filePath),
+    `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+
+  try {
+    await writeFile(tempFile, JSON.stringify(data, null, 2));
+    await rename(tempFile, filePath);
+  } finally {
+    await unlink(tempFile).catch(() => undefined);
+  }
 }
 
 // =============================================================================
@@ -158,19 +175,8 @@ export async function validateAndNormalizeJsonFile<T>(
   const result = await validateJsonFile(filePath, schema);
 
   if (result.valid && result.data) {
-    // Write back the coerced data so downstream consumers get canonical field names.
-    // Use a secure temp file + atomic rename to avoid TOCTOU races on the target path.
-    const tempDir = await mkdtemp(join(tmpdir(), 'auto-claude-normalize-'));
-    const tempFile = join(tempDir, 'output.json');
-    try {
-      await writeFile(tempFile, JSON.stringify(result.data, null, 2));
-      await rename(tempFile, filePath);
-    } finally {
-      await unlink(tempFile).catch(() => undefined);
-      // Best-effort cleanup of the temp directory; ignore errors if already removed
-      const { rmdir } = await import('node:fs/promises');
-      await rmdir(tempDir).catch(() => undefined);
-    }
+    // Use a temp file in the same directory so rename() stays on one filesystem.
+    await writeJsonAtomicallyInPlace(filePath, result.data);
   }
 
   return result;
@@ -337,17 +343,7 @@ export async function repairJsonWithLLM<T>(
         // coercion schema (which may normalize fields further) and write back
         const coerced = schema.safeParse(result.output);
         if (coerced.success) {
-          // Use a secure temp file + atomic rename to avoid TOCTOU races
-          const tempDir = await mkdtemp(join(tmpdir(), 'auto-claude-repair-'));
-          const tempFile = join(tempDir, 'output.json');
-          try {
-            await writeFile(tempFile, JSON.stringify(coerced.data, null, 2));
-            await rename(tempFile, filePath);
-          } finally {
-            await unlink(tempFile).catch(() => undefined);
-            const { rmdir } = await import('node:fs/promises');
-            await rmdir(tempDir).catch(() => undefined);
-          }
+          await writeJsonAtomicallyInPlace(filePath, coerced.data);
           return { valid: true, data: coerced.data, errors: [] };
         }
         // Output.object() passed but coercion schema didn't — update errors for next attempt

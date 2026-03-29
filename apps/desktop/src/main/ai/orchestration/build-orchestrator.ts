@@ -35,6 +35,7 @@ import { safeParseJson } from '../../utils/json-repair';
 import type { SessionResult } from '../session/types';
 import { iterateSubtasks } from './subtask-iterator';
 import type { SubtaskIteratorConfig, SubtaskResult } from './subtask-iterator';
+import { DEFAULT_MAX_QA_ITERATIONS } from './qa-constants';
 
 // =============================================================================
 // Constants
@@ -494,7 +495,7 @@ export class BuildOrchestrator extends EventEmitter {
     // QA review
     this.transitionPhase('qa_review', 'Running QA review');
 
-    const maxQACycles = 3;
+    const maxQACycles = DEFAULT_MAX_QA_ITERATIONS;
     for (let cycle = 0; cycle < maxQACycles; cycle++) {
       if (this.aborted) {
         return { success: false, error: 'Build cancelled' };

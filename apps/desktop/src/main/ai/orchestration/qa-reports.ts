@@ -16,6 +16,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { QAIssue, QAIterationRecord } from './qa-loop';
+import { DEFAULT_MAX_QA_ITERATIONS } from './qa-constants';
 
 // =============================================================================
 // Constants
@@ -23,7 +24,6 @@ import type { QAIssue, QAIterationRecord } from './qa-loop';
 
 const RECURRING_ISSUE_THRESHOLD = 3;
 const ISSUE_SIMILARITY_THRESHOLD = 0.8;
-const MAX_QA_ITERATIONS = 50;
 
 // =============================================================================
 // Issue Similarity
@@ -188,7 +188,7 @@ export function generateQAReport(
   if (finalStatus === 'approved') {
     report += `## Result\n\nQA validation passed successfully. The implementation meets all acceptance criteria.\n`;
   } else if (finalStatus === 'max_iterations') {
-    report += `## Result\n\nQA validation reached the maximum of ${MAX_QA_ITERATIONS} iterations without approval. Human review required.\n`;
+    report += `## Result\n\nQA validation reached the maximum of ${DEFAULT_MAX_QA_ITERATIONS} iterations without approval. Human review required.\n`;
   } else {
     report += `## Result\n\nQA validation was escalated to human review due to recurring issues. See QA_ESCALATION.md for details.\n`;
   }
@@ -231,7 +231,7 @@ export function generateEscalationReport(
   let report = `# QA Escalation — Human Intervention Required
 
 **Generated**: ${now}
-**Iteration**: ${totalIterations}/${MAX_QA_ITERATIONS}
+**Iteration**: ${totalIterations}/${DEFAULT_MAX_QA_ITERATIONS}
 **Reason**: Recurring issues detected (${RECURRING_ISSUE_THRESHOLD}+ occurrences)
 
 ## Summary

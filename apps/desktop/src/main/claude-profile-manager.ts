@@ -105,6 +105,9 @@ export class ClaudeProfileManager {
     // This repairs emails that were truncated due to ANSI escape codes in terminal output
     this.migrateCorruptedEmails();
 
+    // Remove duplicate profiles sharing the same configDir
+    this.deduplicateProfiles();
+
     // Populate missing subscription metadata for existing profiles
     // This reads subscriptionType and rateLimitTier from Keychain credentials
     this.populateSubscriptionMetadata();
@@ -145,6 +148,48 @@ export class ClaudeProfileManager {
       this.save();
       console.warn('[ClaudeProfileManager] Email migration complete');
     }
+  }
+
+  /**
+   * Remove duplicate profiles that share the same configDir.
+   * Keeps the first entry per configDir (typically the oldest/default).
+   * Remaps activeProfileId if the active profile was a duplicate that got removed.
+   */
+  private deduplicateProfiles(): void {
+    const seen = new Map<string, number>();
+    const duplicateIndices: number[] = [];
+    const removedIds: string[] = [];
+
+    for (let i = 0; i < this.data.profiles.length; i++) {
+      const configDir = this.data.profiles[i].configDir;
+      if (!configDir) continue;
+
+      if (seen.has(configDir)) {
+        duplicateIndices.push(i);
+        removedIds.push(this.data.profiles[i].id);
+      } else {
+        seen.set(configDir, i);
+      }
+    }
+
+    if (duplicateIndices.length === 0) return;
+
+    // Remap activeProfileId if it points to a duplicate being removed
+    if (this.data.activeProfileId && removedIds.includes(this.data.activeProfileId)) {
+      const activeConfigDir = this.data.profiles.find(p => p.id === this.data.activeProfileId)?.configDir;
+      const survivorIndex = activeConfigDir ? seen.get(activeConfigDir) : undefined;
+      if (survivorIndex !== undefined) {
+        this.data.activeProfileId = this.data.profiles[survivorIndex].id;
+      }
+    }
+
+    // Remove duplicates in reverse to preserve indices
+    for (let i = duplicateIndices.length - 1; i >= 0; i--) {
+      this.data.profiles.splice(duplicateIndices[i], 1);
+    }
+
+    debugLog(`[ClaudeProfileManager] Deduplicated profiles: removed ${duplicateIndices.length} duplicates, ${this.data.profiles.length} remaining`);
+    this.save();
   }
 
   /**
@@ -362,16 +407,40 @@ export class ClaudeProfileManager {
       profile.configDir = expandHomePath(profile.configDir);
     }
 
-    const index = this.data.profiles.findIndex(p => p.id === profile.id);
+    const indexById = this.data.profiles.findIndex(p => p.id === profile.id);
 
-    if (index >= 0) {
-      // Update existing
-      this.data.profiles[index] = profile;
-    } else {
-      // Add new
-      this.data.profiles.push(profile);
+    if (indexById >= 0) {
+      // Update existing profile by ID
+      this.data.profiles[indexById] = profile;
+      this.save();
+      return profile;
     }
 
+    // No ID match — check for configDir duplicate before adding
+    if (profile.configDir) {
+      const indexByConfigDir = this.data.profiles.findIndex(
+        p => p.configDir === profile.configDir
+      );
+
+      if (indexByConfigDir >= 0) {
+        // Same configDir exists with a different ID — update existing entry
+        const existingId = this.data.profiles[indexByConfigDir].id;
+        const existingIsDefault = this.data.profiles[indexByConfigDir].isDefault;
+        debugLog('[ClaudeProfileManager] Dedup: profile with configDir already exists, updating instead of adding', {
+          existingId,
+          incomingId: profile.id,
+          configDir: profile.configDir,
+        });
+        profile.id = existingId;
+        profile.isDefault = existingIsDefault || profile.isDefault;
+        this.data.profiles[indexByConfigDir] = profile;
+        this.save();
+        return profile;
+      }
+    }
+
+    // Genuinely new profile
+    this.data.profiles.push(profile);
     this.save();
     return profile;
   }

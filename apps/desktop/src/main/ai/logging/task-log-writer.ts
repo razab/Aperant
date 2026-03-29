@@ -236,8 +236,8 @@ export class TaskLogWriter {
     let detail: string | undefined;
     if (result !== null && result !== undefined) {
       const raw = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-      // Cap at 10KB to match Python behavior
-      detail = raw.length > 10240 ? `${raw.slice(0, 10240)}\n\n... [truncated]` : raw;
+      // Cap at 64KB — QA reports with detailed findings can exceed 10KB
+      detail = raw.length > 65536 ? `${raw.slice(0, 65536)}\n\n... [truncated]` : raw;
     }
 
     this.addEntry(phase, 'tool_end', content, {
